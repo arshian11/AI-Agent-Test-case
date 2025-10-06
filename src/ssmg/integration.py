@@ -308,7 +308,7 @@ class GroqAPIInterface(LLMInterface):
     def __init__(self, api_key: str = None, model_name: str = "llama-3.3-70b-versatile"):
         super().__init__(model_name)
         if api_key is None:
-            api_key = "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"
+            api_key = "your_api_key"
 
         if not api_key:
             logger.warning("No GROQ_API_KEY found. Falling back to mock responses.")
