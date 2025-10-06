@@ -1,0 +1,41 @@
+{
+    "graph": {
+        "max_nodes": 50,
+        "max_ttl_turns": 8,
+        "decay_rate": 0.05
+    },
+    "summarizer": {
+        "max_tokens": 200,
+        "max_nodes": 16,
+        "recency_weight": 0.4,
+        "confidence_weight": 0.3,
+        "relevance_weight": 0.3,
+        "include_constraints": true,
+        "include_intents": true
+    },
+    "extractor": {
+        "spacy_model": "en_core_web_sm",
+        "confidence_threshold": 0.5
+    },
+    "llm": {
+        "model_name": "meta-llama/Llama-2-7b-chat-hf",
+        "max_tokens": 150,
+        "temperature": 0.7,
+        "device": "auto"
+    },
+    "evaluation": {
+        "dataset": "multiwoz",
+        "data_path": "data/datasets",
+        "max_dialogues": 100,
+        "splits": {
+            "train": "train",
+            "validation": "validation", 
+            "test": "test"
+        },
+        "multiwoz_config": {
+            "download_if_missing": true,
+            "use_synthetic_fallback": true,
+            "max_turn_length": 10
+        }
+    }
+}
