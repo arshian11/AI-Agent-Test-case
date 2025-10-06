@@ -149,6 +149,246 @@ class LLaMAInterface(LLMInterface):
             return prompt.split("User: ")[-1].replace("Assistant:", "").strip()
         return prompt.strip()
 
+# class WorkingDialogueInterface(LLMInterface):
+#     """Improved dialogue interface with better prompt formatting"""
+    
+#     def __init__(self, model_name: str = "meta-llama/Llama-2-7b-chat-hf"):
+#         super().__init__(model_name)
+#         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+#         self.model = None
+#         self.tokenizer = None
+#         self._initialize_model()
+        
+#     def _initialize_model(self):
+#         try:
+#             from transformers import AutoTokenizer, AutoModelForCausalLM
+            
+#             logger.info(f"Loading dialogue model: {self.model_name}")
+            
+#             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+#             self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+#             self.model = AutoModelForCausalLM.from_pretrained(
+#                 self.model_name,
+#                 dtype=torch.float32,
+#                 low_cpu_mem_usage=True,
+#                 offload_folder="offload",
+#                 llm_int8_enable_fp32_cpu_offload=True,
+#                 load_in_4bit=True,
+#                 device_map="cpu"
+#             ).to(self.device)
+            
+#             logger.info(f"Model loaded successfully on {self.device}")
+            
+#         except Exception as e:
+#             logger.error(f"Failed to load model: {e}. Using fallback responses.")
+#             self.model = None
+    
+#     def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+#         if not self.model:
+#             return self._fallback_response(prompt, max_tokens)
+        
+#         try:
+#             # Clean and format the prompt for dialogue
+#             formatted_prompt = self._format_dialogue_prompt(prompt)
+            
+#             # Tokenize with proper settings
+#             inputs = self.tokenizer(
+#                 formatted_prompt,
+#                 return_tensors="pt",
+#                 truncation=True,
+#                 max_length=512,  # Shorter context to avoid issues
+#                 padding=False
+#                 ).to(self.device)
+            
+#             input_length = inputs['input_ids'].shape[1]
+            
+#             # Generate with better parameters
+#             with torch.no_grad():
+#                 outputs = self.model.generate(
+#                     **inputs,
+#                     max_new_tokens=min(max_tokens, 50),  # Shorter responses
+#                     do_sample=True,
+#                     temperature=0.8,
+#                     top_p=0.9,
+#                     repetition_penalty=1.2,  # Reduce repetition
+#                     no_repeat_ngram_size=3,  # Prevent 3-gram repetition
+#                     pad_token_id=self.tokenizer.eos_token_id,
+#                     eos_token_id=self.tokenizer.eos_token_id
+#                 )
+            
+#             # Decode only the new tokens
+#             new_tokens = outputs[0][input_length:]
+#             response = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+            
+#             # Clean the response
+#             response = self._clean_response(response)
+            
+#             return response, input_length, len(new_tokens)
+            
+#         except Exception as e:
+#             logger.error(f"Generation error: {e}")
+#             return self._fallback_response(prompt, max_tokens)
+    
+#     def _format_dialogue_prompt(self, prompt: str) -> str:
+#         """Format prompt for better dialogue generation"""
+#         # Extract context and user input
+#         if "Context from previous conversation:" in prompt:
+#             parts = prompt.split("User: ")
+#             if len(parts) > 1:
+#                 context = parts[0].replace("Context from previous conversation:", "").strip()
+#                 user_input = parts[1].replace("Assistant:", "").strip()
+                
+#                 # Simple dialogue format
+#                 return f"Context: {context}\nUser: {user_input}\nAssistant:"
+        
+#         # Simple format
+#         return prompt.replace("Assistant:", "").strip() + "\nAssistant:"
+    
+#     def _clean_response(self, response: str) -> str:
+#         """Clean and improve the response"""
+#         # Remove common artifacts
+#         response = response.strip()
+        
+#         # Remove instruction tokens and artifacts
+#         for artifact in ["[INST]", "[/INST]", "<s>", "</s>", "[INFO]"]:
+#             response = response.replace(artifact, "")
+        
+#         # Split into sentences and take the first complete one
+#         sentences = response.split('. ')
+#         if sentences:
+#             clean_response = sentences[0].strip()
+#             if clean_response and not clean_response.endswith('.'):
+#                 clean_response += '.'
+            
+#             # Ensure it's a reasonable response length
+#             if len(clean_response) > 10 and len(clean_response) < 200:
+#                 return clean_response
+        
+#         # Fallback to first reasonable line
+#         lines = [line.strip() for line in response.split('\n') if line.strip()]
+#         for line in lines:
+#             if 10 < len(line) < 200 and not any(x in line.lower() for x in ['[', 'sudo', 'php', 'file']):
+#                 return line
+        
+#         return "I understand your request. How can I help you further?"
+    
+#     def _fallback_response(self, prompt: str, max_tokens: int) -> Tuple[str, int, int]:
+#         """Generate contextual fallback responses"""
+#         user_input = prompt.split("User:")[-1].replace("Assistant:", "").strip().lower()
+        
+#         # Context-aware responses
+#         if any(word in user_input for word in ['pizza', 'order']):
+#             response = "I'll help you with your pizza order. What would you like me to do?"
+#         elif any(word in user_input for word in ['pasta', 'change']):
+#             response = "I can change your order to pasta. I'll make sure to follow your preferences."
+#         elif any(word in user_input for word in ['bread', 'add']):
+#             response = "I'll add that to your order."
+#         elif any(word in user_input for word in ['cost', 'price', 'total']):
+#             response = "Let me calculate the total cost for your order."
+#         elif any(word in user_input for word in ['onions', 'no', 'avoid']):
+#             response = "I'll make sure to avoid onions as requested."
+#         else:
+#             response = "I understand. How can I help you with your request?"
+        
+#         return response, len(prompt.split()), len(response.split())
+
+import requests
+import os
+
+
+from groq import Groq
+from typing import Tuple
+# import logging
+
+# logger = logging.getLogger(__name__)
+class GroqAPIInterface(LLMInterface):
+    """Interface for Groq Language Model API"""
+
+    def __init__(self, api_key: str = None, model_name: str = "llama-3.3-70b-versatile"):
+        super().__init__(model_name)
+        if api_key is None:
+            api_key = "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"
+
+        if not api_key:
+            logger.warning("No GROQ_API_KEY found. Falling back to mock responses.")
+            self.client = None
+        else:
+            try:
+                self.client = Groq(api_key=api_key)
+                logger.info(f"Groq client initialized with model {self.model_name}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Groq client: {e}")
+                self.client = None
+
+    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+        """Generate response from Groq API
+        Returns: (response_text, input_tokens, output_tokens)
+        """
+        if not self.client:
+            logger.warning("Groq client not available, using fallback response.")
+            return super().generate_response(prompt, max_tokens)
+
+        try:
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                model=self.model_name,
+                max_tokens=max_tokens,
+                temperature=0.7,
+                top_p=0.9
+            )
+
+            # Extract the assistant's message
+            message = chat_completion.choices[0].message.content
+            input_tokens = chat_completion.usage.prompt_tokens
+            output_tokens = chat_completion.usage.completion_tokens
+
+            return message.strip(), input_tokens, output_tokens
+
+        except Exception as e:
+            logger.error(f"Groq API error: {e}, using fallback response.")
+            return super().generate_response(prompt, max_tokens)
+
+# class GeminiAPIInterface(LLMInterface):
+#     """Interface for Gemini Language Model API"""
+
+#     def __init__(self, api_key: str = None, model_name: str = "gemini-v1"):
+#         super().__init__(model_name)
+#         if api_key is None:
+#             api_key = os.getenv("GEMINI_API_KEY")
+#         self.api_key = "AIzaSyD_R0g1Hyzg39RUDeQ5Tm86Fbwdicslcb0"
+#         self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"  # Replace with actual Gemini API URL
+
+#     def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+#         headers = {
+#             "Authorization": f"Bearer {self.api_key}",
+#             "Content-Type": "application/json"
+#         }
+#         data = {
+#             "model": self.model_name,
+#             "prompt": prompt,
+#             "max_tokens": max_tokens,
+#             "temperature": 0.7,
+#             "top_p": 0.9,
+#             "frequency_penalty": 0,
+#             "presence_penalty": 0
+#         }
+#         try:
+#             response = requests.post(self.api_url, headers=headers, json=data, timeout=30)
+#             response.raise_for_status()
+#             resp_json = response.json()
+#             text = resp_json.get("text") or resp_json.get("generated_text")
+#             # Estimate tokens as word count approximation
+#             input_tokens = len(prompt.split())
+#             output_tokens = len(text.split()) if text else 0
+#             return text.strip(), input_tokens, output_tokens
+#         except Exception as e:
+#             # fallback to default mock response
+#             print(f"Gemini API error: {e}, falling back")
+#             return super().generate_response(prompt, max_tokens)
 
 
 
