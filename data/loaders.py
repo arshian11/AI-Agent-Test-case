@@ -136,19 +136,6 @@
 #             }
 #         ]
 
-# class ConfigLoader:
-#     """Load evaluation configurations from JSON"""
-
-#     @staticmethod
-#     def load_config(config_path: str) -> Dict[str, Any]:
-#         """Load configuration from JSON file"""
-#         with open(config_path, 'r') as f:
-#             return json.load(f)
-
-#     @staticmethod
-#     def get_test_dialogues(config: Dict[str, Any]) -> List[Dict[str, Any]]:
-#         """Extract test dialogues from config"""
-#         return config.get('evaluation', {}).get('test_dialogues', [])
 
 # def load_dataset(dataset_name: str, data_path: str) -> DialogueDataset:
 #     """Factory function to load datasets"""
@@ -169,13 +156,88 @@ from typing import List, Dict, Any, Iterator
 from pathlib import Path
 import logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='dialogue_agent.log',  # <-- logs go here
-    filemode='w'  # 'w' to overwrite each run, 'a' to append
-)
+
 logger = logging.getLogger(__name__)
+
+class ConfigLoader:
+    """Load evaluation configurations from JSON"""
+
+    @staticmethod
+    def load_config(config_path: str) -> Dict[str, Any]:
+        """Load configuration from JSON file"""
+        with open(config_path, 'r') as f:
+            return json.load(f)
+
+    @staticmethod
+    def get_test_dialogues(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract test dialogues from config"""
+        return config.get('evaluation', {}).get('test_dialogues', [])
+
+def get_intent_from_dialog_act(dialog_act: dict) -> str:
+    if not dialog_act:
+        return "unknown"
+
+    # Take the first key as dominant intent
+    act_key = list(dialog_act.keys())[0]
+
+    # Mapping all 36 dialog acts to normalized intents
+    mapping = {
+        # Attraction
+        "Attraction-Inform": "inform",
+        "Attraction-NoOffer": "no_offer",
+        "Attraction-Recommend": "recommend",
+        "Attraction-Request": "request",
+        "Attraction-Select": "select",
+
+        # Booking
+        "Booking-Book": "book",
+        "Booking-Inform": "inform",
+        "Booking-NoBook": "no_book",
+        "Booking-Request": "request",
+
+        # Hospital
+        "Hospital-Inform": "inform",
+        "Hospital-Request": "request",
+
+        # Hotel
+        "Hotel-Inform": "inform",
+        "Hotel-NoOffer": "no_offer",
+        "Hotel-Recommend": "recommend",
+        "Hotel-Request": "request",
+        "Hotel-Select": "select",
+
+        # Police
+        "Police-Inform": "inform",
+        "Police-Request": "request",
+
+        # Restaurant
+        "Restaurant-Inform": "inform",
+        "Restaurant-NoOffer": "no_offer",
+        "Restaurant-Recommend": "recommend",
+        "Restaurant-Request": "request",
+        "Restaurant-Select": "select",
+
+        # Taxi
+        "Taxi-Inform": "inform",
+        "Taxi-Request": "request",
+
+        # Train
+        "Train-Inform": "inform",
+        "Train-NoOffer": "no_offer",
+        "Train-OfferBook": "offer_book",
+        "Train-OfferBooked": "offer_booked",
+        "Train-Request": "request",
+        "Train-Select": "select",
+
+        # General
+        "general-bye": "bye",
+        "general-greet": "greet",
+        "general-reqmore": "request_more",
+        "general-thank": "thank",
+        "general-welcome": "welcome"
+    }
+
+    return mapping.get(act_key, "unknown")
 
 class MultiWOZLoader:
     """MultiWOZ dataset loader with automatic download and parsing"""
@@ -190,11 +252,72 @@ class MultiWOZLoader:
     def setup_and_load(self):
         """Setup directories and load MultiWOZ data"""
         self.data_path.mkdir(parents=True, exist_ok=True)
-        
-        # Try datasets library first, then manual download, then synthetic
-        if not self._load_from_datasets():
-            if not self._download_multiwoz():
-                self._create_synthetic_data()
+
+        # Try datasets library first
+        if self._load_from_datasets():
+            return
+
+        logger.warning("Couldn't load MultiWOZ using HuggingFace datasets library")
+
+        # Try local data.json (MultiWOZ 2.1 format)
+        local_data_path = self.data_path / "data.json"
+        if local_data_path.exists():
+            logger.info(f"Loading MultiWOZ from local file: {local_data_path}")
+            self._load_from_local_json(local_data_path)
+            return
+
+        # Try manual download (sample)
+        if self._download_multiwoz():
+            return
+
+        logger.warning("Couldn't Download or load local MultiWOZ manually")
+        # print("Couldn't Download MultiWOZ manually")
+        self._create_synthetic_data()
+        logger.info("Using Synthetic MultiWOZ like Data")
+
+    def _load_from_local_json(self, json_path: Path):
+        """Load MultiWOZ 2.1-style data.json file"""
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            count = 0
+            for dialogue_id, dialogue in data.items():
+                if count >= self.max_dialogues:
+                    break
+                turns = []
+                log = dialogue.get('log', [])
+                for i in range(0, len(log), 2):
+                    if i + 1 < len(log):
+                        user_turn = log[i]
+                        system_turn = log[i + 1]
+                        user_text = user_turn.get('text', '').strip()
+                        system_text = system_turn.get('text', '').strip()
+                        if user_text and system_text:
+                            turns.append({
+                                'user_input': user_text,
+                                'system_response': system_text,
+                                'turn_id': i // 2,
+                                'user_acts': user_turn.get('dialog_act', {}),
+                                'true_intent': get_intent_from_dialog_act(user_turn.get('dialog_act', {})),
+                                'belief_state': system_turn.get('metadata', {})
+                            })
+                            
+                if len(turns) >= 2:
+                    # Extract only populated goal domains (non-empty dict or list)
+                    goal = dialogue.get('goal', {})
+                    populated_domains = [k for k, v in goal.items() if v and (isinstance(v, dict) and v or isinstance(v, list) and len(v) > 0)]
+                    self.dialogues.append({
+                        'dialogue_id': dialogue_id,
+                        'turns': turns,
+                        'domains': populated_domains or ['general'],
+                        'success': True  # Not available in 2.1
+                    })
+                    count += 1
+            logger.info(f"Loaded {len(self.dialogues)} dialogues from local data.json")
+        except Exception as e:
+            logger.error(f"Failed to load local data.json: {e}")
+            self.dialogues = []
     
     def _load_from_datasets(self) -> bool:
         """Load using HuggingFace datasets library"""
@@ -210,14 +333,14 @@ class MultiWOZLoader:
                     break
                 
                 dialogue_id = f"mwz_{count:04d}"
-                turns = self._parse_multiwoz_example(example)
+                turns = self._parse_multiwoz_example(example) #type: ignore
                 
                 if len(turns) >= 2:
                     self.dialogues.append({
                         'dialogue_id': dialogue_id,
                         'turns': turns,
-                        'domains': self._extract_domains(example),
-                        'success': example.get('metadata', {}).get('success', False)
+                        'domains': self._extract_domains(example), #type: ignore
+                        'success': example.get('metadata', {}).get('success', False)   #type: ignore
                     })
                     count += 1
             
@@ -404,3 +527,4 @@ class MultiWOZLoader:
     
     def __getitem__(self, idx):
         return self.dialogues[idx]
+# python evaluation/eval_runner.py --config configs/default_config.json --output-dir results --max-dialogues 100 
