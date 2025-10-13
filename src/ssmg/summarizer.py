@@ -31,8 +31,8 @@ class RelevanceScorer:
         self.config = config
 
     def score_nodes(self, graph: SSMGGraph, 
-                   current_entities: Set[str] = None,
-                   current_intent: str = None) -> List[Tuple[str, float]]:
+                   current_entities: Set[str] = None, #type: ignore
+                   current_intent: str = None) -> List[Tuple[str, float]]: #type: ignore
         """Score all nodes for relevance to current context"""
         scored_nodes = []
         current_entities = current_entities or set()
@@ -43,6 +43,8 @@ class RelevanceScorer:
 
         # Sort by score (descending)
         scored_nodes.sort(key=lambda x: x[1], reverse=True)
+        if not scored_nodes:
+            logger.warning(f"[Turn ID: {graph.current_turn}] No Scored Nodes were present for Entities:{current_entities} and Intents:{current_intent}")
         return scored_nodes
 
     def _calculate_node_score(self, node: Node, graph: SSMGGraph, 
@@ -56,11 +58,11 @@ class RelevanceScorer:
 
         # Type-based boosts
         type_boost = 1.0
-        if node.type == NodeType.CONSTRAINT:
+        if node.type.value == NodeType.CONSTRAINT.value:
             type_boost = 1.5  # Constraints are very important
-        elif node.type == NodeType.INTENT:
+        elif node.type.value == NodeType.INTENT.value:
             type_boost = 1.3  # Intents are important
-        elif node.type == NodeType.ENTITY:
+        elif node.type.value == NodeType.ENTITY.value:
             type_boost = 1.1  # Entities moderately important
 
         # Connectivity boost (well-connected nodes are more important)
@@ -133,13 +135,13 @@ class TemplateGenerator:
         }
 
         for node in selected_nodes:
-            if node.type == NodeType.CONSTRAINT:
+            if node.type.value == NodeType.CONSTRAINT.value:
                 grouped['CONSTRAINTS'].append(node.content)
-            elif node.type == NodeType.INTENT:
+            elif node.type.value == NodeType.INTENT.value:
                 grouped['INTENTS'].append(node.content)
-            elif node.type == NodeType.ENTITY:
+            elif node.type.value == NodeType.ENTITY.value:
                 grouped['ENTITIES'].append(node.content)
-            elif node.type == NodeType.FACT:
+            elif node.type.value == NodeType.FACT.value:
                 grouped['FACTS'].append(node.content)
 
         # Generate sections
@@ -165,7 +167,8 @@ class TemplateGenerator:
         relations = self._extract_key_relations(selected_nodes, graph)
         if relations:
             sections.append(f"RELATIONS: {relations}")
-
+        if not sections:
+            logger.warning(f"[Turn ID: {graph.current_turn}] No Sections Were Created in Summary")
         return ' | '.join(sections) if sections else "No context available."
 
     def _extract_key_relations(self, nodes: List[Node], graph: SSMGGraph) -> str:
@@ -185,53 +188,137 @@ class TemplateGenerator:
 class SSMGSummarizer:
     """Main summarizer class for SSMG"""
 
-    def __init__(self, config: SummaryConfig = None):
+    def __init__(self, config: SummaryConfig = None): #type: ignore
         self.config = config or SummaryConfig()
         self.scorer = RelevanceScorer(self.config)
         self.generator = TemplateGenerator()
 
+    # def summarize(self, graph: SSMGGraph, 
+    #              current_entities: Set[str] = None, #type: ignore
+    #              current_intent: str = None) -> str: #type: ignore
+    #     """Generate a concise summary of the graph state"""
+
+    #     if not graph.nodes:
+    #         return "No context available."
+
+    #     # Score and select top nodes
+    #     scored_nodes = self.scorer.score_nodes(graph, current_entities, current_intent)
+
+    #     # Select top nodes up to max_nodes limit
+    #     selected_node_ids = [node_id for node_id, _ in scored_nodes[:self.config.max_nodes]]
+    #     selected_nodes = [graph.nodes[node_id] for node_id in selected_node_ids 
+    #                      if node_id in graph.nodes]
+
+    #     # Ensure constraints and intents are included if they exist
+    #     if self.config.include_constraints:
+    #         constraints = graph.get_nodes_by_type(NodeType.CONSTRAINT)
+    #         for constraint in constraints[:3]:  # Include top 3 constraints
+    #             if constraint not in selected_nodes:
+    #                 selected_nodes.append(constraint)
+
+    #     if self.config.include_intents:
+    #         intents = graph.get_nodes_by_type(NodeType.INTENT)
+    #         recent_intents = [intent for intent in intents if intent.turn_id >= graph.current_turn - 2]
+    #         for intent in recent_intents[:2]:  # Include recent intents
+    #             if intent not in selected_nodes:
+    #                 selected_nodes.append(intent)
+
+    #     # Generate summary
+    #     summary = self.generator.generate(selected_nodes, graph)
+
+    #     # Truncate if too long (rough token estimation: 1 token ≈ 4 chars)
+    #     estimated_tokens = len(summary) // 4
+    #     if estimated_tokens > self.config.max_tokens:
+    #         # Truncate summary
+    #         char_limit = self.config.max_tokens * 4
+    #         summary = summary[:char_limit] + "..."
+
+    #     logger.debug(f"Generated summary: {len(summary)} chars, ~{estimated_tokens} tokens")
+    #     return summary
     def summarize(self, graph: SSMGGraph, 
-                 current_entities: Set[str] = None,
-                 current_intent: str = None) -> str:
-        """Generate a concise summary of the graph state"""
+             current_entities: Set[str] = None, #type: ignore
+             current_intent: str = None) -> str: #type: ignore
+        """Generate a concise summary of the graph state, robust to missing edges"""
 
         if not graph.nodes:
+            logger.warning(f"[Turn ID: {graph.current_turn}] No Nodes present in the graph to build summary")
             return "No context available."
+        
 
-        # Score and select top nodes
+        # 1️⃣ Score all nodes
         scored_nodes = self.scorer.score_nodes(graph, current_entities, current_intent)
 
-        # Select top nodes up to max_nodes limit
+        # 2️⃣ Select top nodes up to max_nodes
         selected_node_ids = [node_id for node_id, _ in scored_nodes[:self.config.max_nodes]]
-        selected_nodes = [graph.nodes[node_id] for node_id in selected_node_ids 
-                         if node_id in graph.nodes]
+        selected_nodes = [graph.nodes[node_id] for node_id in selected_node_ids if node_id in graph.nodes]
 
-        # Ensure constraints and intents are included if they exist
+        # 3️⃣ Ensure user node is always included
+        # user_nodes = graph.get_nodes_by_type(NodeType.ENTITY)
+        # for n in user_nodes:
+        #     if n.content.lower() == "user" and n not in selected_nodes:
+        #         selected_nodes.insert(0, n)
+
+        # 4️⃣ Include recent nodes (last 3 turns) to capture context
+        recent_nodes = [n for n in graph.nodes.values() if n.turn_id >= graph.current_turn - 3]
+        for n in recent_nodes:
+            if n not in selected_nodes:
+                selected_nodes.append(n)
+
+        # 5️⃣ Include top constraints if configured
         if self.config.include_constraints:
             constraints = graph.get_nodes_by_type(NodeType.CONSTRAINT)
-            for constraint in constraints[:3]:  # Include top 3 constraints
+            for constraint in constraints[:3]:
                 if constraint not in selected_nodes:
                     selected_nodes.append(constraint)
 
+        # 6️⃣ Include recent intents if configured
         if self.config.include_intents:
             intents = graph.get_nodes_by_type(NodeType.INTENT)
             recent_intents = [intent for intent in intents if intent.turn_id >= graph.current_turn - 2]
-            for intent in recent_intents[:2]:  # Include recent intents
+            for intent in recent_intents[:2]:
                 if intent not in selected_nodes:
                     selected_nodes.append(intent)
 
-        # Generate summary
+        # 7️⃣ Fallback: If no nodes selected, include first 5 nodes
+        if not selected_nodes:
+            logger.warning("No Nodes were selected so using fallback to select frist 5 nodes")
+            selected_nodes = list(graph.nodes.values())[:5]
+
+        # 8️⃣ Generate summary using TemplateGenerator
         summary = self.generator.generate(selected_nodes, graph)
 
-        # Truncate if too long (rough token estimation: 1 token ≈ 4 chars)
+        # 9️⃣ Fallback for empty edges
+        # if "RELATIONS: " not in summary and graph.edges:
+        #     relations = ', '.join([f"{graph.nodes[e.source_id].content} {e.relation.value} {graph.nodes[e.target_id].content}" 
+        #                         for e in list(graph.edges.values())[:3]])
+        #     if relations:
+        #         summary += f" | RELATIONS: {relations}"
+        #     logger.warning("No RELATIONS were present in the Summary using fallback")
+        valid_edges = []
+        for eid, e in graph.edges.items():
+            if e.source_id not in graph.nodes or e.target_id not in graph.nodes:
+                logger.warning(f"⚠️ Invalid edge found: {eid} (source={e.source_id}, target={e.target_id})")
+            else:
+                valid_edges.append(e)
+
+        # Then use only valid_edges for summarization
+        if "RELATIONS: " not in summary and valid_edges:
+            relations = ', '.join([
+                f"{graph.nodes[e.source_id].content} {e.relation.value} {graph.nodes[e.target_id].content}"
+                for e in valid_edges[:3]
+            ])
+            if relations:
+                summary += f" | RELATIONS: {relations}"
+
+        # 10️⃣ Truncate if too long (approx 1 token ≈ 4 chars)
         estimated_tokens = len(summary) // 4
         if estimated_tokens > self.config.max_tokens:
-            # Truncate summary
             char_limit = self.config.max_tokens * 4
             summary = summary[:char_limit] + "..."
 
-        logger.debug(f"Generated summary: {len(summary)} chars, ~{estimated_tokens} tokens")
+        logger.debug(f"Modified Generated summary: {len(summary)} chars, ~{estimated_tokens} tokens")
         return summary
+
 
     def summarize_updates(self, graph: SSMGGraph, recent_nodes: List[Node]) -> str:
         """Generate a summary focusing on recent updates"""
