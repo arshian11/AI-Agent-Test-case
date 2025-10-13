@@ -6,7 +6,7 @@ Handles nodes, edges, metadata, and eviction policies for ephemeral dialogue mem
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional, Any, Tuple
 from datetime import datetime
-import json
+# import json
 import logging
 from collections import defaultdict, deque
 from enum import Enum
@@ -27,6 +27,7 @@ class RelationType(Enum):
     AFTER = "after"
     MENTIONS = "mentions"
     CONFLICTS_WITH = "conflicts_with"
+    RELATED = "related"
 
 
 relation_map = {
@@ -100,7 +101,8 @@ class SSMGGraph:
         self.adjacency: Dict[str, Set[str]] = defaultdict(set)
         self.node_index = defaultdict(dict)  # {NodeType: {content_lower: node_id}}
 
-        self.lemmatizer = WordNetLemmatizer()
+        # self.lemmatizer = WordNetLemmatizer()
+        self.user_node = None
 
         # Configuration
         self.max_nodes = max_nodes
@@ -152,6 +154,7 @@ class SSMGGraph:
         node.turn_id = self.current_turn
         # content_key = node.content.strip().lower()
         content_key = self._normalize_content(node.content)
+        node.content = content_key
 
 
         # --- Deduplication using node_index (O(1) lookup) ---
@@ -167,7 +170,7 @@ class SSMGGraph:
             existing_node.turn_id = node.turn_id
             existing_node.metadata.update(node.metadata)
 
-            logger.debug(f"Updated existing node (dedup): {existing_node.id} ({existing_node.content})")
+            logger.debug(f"[Turn ID: {self.current_turn}] Updated existing node (dedup): {existing_node.id} ({existing_node.content})")
             return True
         # -----------------------------------------------------
 
@@ -182,13 +185,13 @@ class SSMGGraph:
         # Register in index
         self.node_index[node.type][content_key] = node.id
 
-        logger.debug(f"Added node: {node.id} ({node.type.value})")
+        logger.debug(f"[Turn ID: {self.current_turn}] Added node: {node.id} ({node.type.value})")
         return True
 
     def add_edge(self, edge: Edge) -> bool:
         """Add an edge to the graph"""
         if edge.source_id not in self.nodes or edge.target_id not in self.nodes:
-            logger.warning(f"Cannot add edge - missing nodes: {edge.source_id} -> {edge.target_id}")
+            logger.warning(f"[Turn ID: {self.current_turn}] Cannot add edge - missing nodes: {edge.source_id} -> {edge.target_id}")
             return False
 
         edge.turn_id = self.current_turn
@@ -197,7 +200,7 @@ class SSMGGraph:
         self.edges[edge_id] = edge
         self.adjacency[edge.source_id].add(edge.target_id)
 
-        logger.debug(f"Added edge: {edge_id}")
+        logger.debug(f"[Turn ID: {self.current_turn}] Added edge: {edge_id}")
         return True
 
     def _update_existing_node(self, new_node: Node) -> None:
@@ -234,7 +237,7 @@ class SSMGGraph:
 
         for node_id in to_evict:
             self._remove_node(node_id)
-            logger.debug(f"Evicted node: {node_id}")
+            logger.debug(f"[Turn ID: {self.current_turn}] Evicted node: {node_id}")
 
     def _remove_node(self, node_id: str) -> None:
         """Remove a node and its associated edges"""
@@ -267,15 +270,48 @@ class SSMGGraph:
         if node.type in self.node_index and content_key in self.node_index[node.type]:
             del self.node_index[node.type][content_key]
 
+        self._remove_edges_for_node(node_id)
         # Remove from graph
-        del self.nodes[node_id]
-        del self.adjacency[node_id]
+        try:
+            del self.nodes[node_id]
+            del self.adjacency[node_id]
+        except Exception as e:
+            logger.debug(f"Error removing node {node_id}: {e}")
+
 
         # Remove from other adjacency lists
         for neighbors in self.adjacency.values():
             neighbors.discard(node_id)
 
-        logger.debug(f"Removed node: {node_id}")
+        # logger.debug(f"[Turn ID: {self.current_turn}] Removed node: {node_id}")
+
+    def _remove_edges_for_node(self, node_id: str) -> None:
+        """Remove all edges connected to a given node (incoming or outgoing)."""
+        to_remove = [
+            edge_id for edge_id, edge in self.edges.items()
+            if edge.source_id == node_id or edge.target_id == node_id
+        ]
+        if not to_remove:
+            return
+        for edge_id in to_remove:
+            try:
+                del self.edges[edge_id]
+            except Exception as e:
+                logger.debug(f"Error removing edge {edge_id}: {e}")
+                
+
+        # Clean up adjacency
+        try:
+            # if node_id in self.adjacency:
+            #     del self.adjacency[node_id]
+            for neighbors in self.adjacency.values():
+                neighbors.discard(node_id)
+
+            logger.debug(f"[Turn ID: {self.current_turn}] Removed {len(to_remove)} edges connected to node: {node_id}")
+        except Exception as e:
+            logger.debug(f"Error cleaning adjacency for node {node_id}: {e}")
+        
+
 
     def infer_relations_for_turn(self) -> None:
         """Infer simple semantic edges between recently added nodes."""
@@ -307,11 +343,15 @@ class SSMGGraph:
 
         # Apply confidence decay
         for node in self.nodes.values():
+            if node.id == 'user_session' or node.id == 'user':
+                continue
             node.decay_confidence(self.decay_rate)
 
         # TTL-based eviction
         expired_nodes = []
         for node_id, node in self.nodes.items():
+            if node.id == 'user' or node.id == 'user_session':
+                continue
             if node.age_in_turns(self.current_turn) > self.max_ttl_turns:
                 # Skip high-priority nodes for TTL
                 if node.type in [NodeType.CONSTRAINT, NodeType.INTENT]:
@@ -320,7 +360,7 @@ class SSMGGraph:
 
         for node_id in expired_nodes:
             self._remove_node(node_id)
-            logger.debug(f"TTL expired node: {node_id}")
+            logger.debug(f"[Turn ID: {self.current_turn}] TTL expired node: {node_id}")
 
     def get_neighbors(self, node_id: str, max_depth: int = 2) -> Set[str]:
         """Get neighbors within max_depth hops"""
@@ -347,7 +387,7 @@ class SSMGGraph:
 
     def get_nodes_by_type(self, node_type: NodeType) -> List[Node]:
         """Get all nodes of a specific type"""
-        return [node for node in self.nodes.values() if node.type == node_type]
+        return [node for node in self.nodes.values() if node.type.value == node_type.value]
 
     def get_recent_nodes(self, max_turns_back: int = 3) -> List[Node]:
         """Get nodes from recent turns"""
