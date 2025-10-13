@@ -8,18 +8,14 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
-import json
-
+# import json
 from .graph import SSMGGraph, Node, NodeType
 from .extractor import SSMGExtractor, ExtractionResult
-from .summarizer import SSMGSummarizer, SummaryConfig
-
-
-logger = logging.getLogger(__name__)
+from.summarizer import SSMGSummarizer, SummaryConfig
 
 # Add after existing imports at the top
 import torch
-
+logger = logging.getLogger(__name__)
 @dataclass
 class TurnMetrics:
     """Metrics for a single dialogue turn"""
@@ -41,6 +37,7 @@ class DialogueSession:
     """Represents a complete dialogue session"""
     session_id: str
     start_time: datetime = field(default_factory=datetime.now)
+    end_time: datetime = field(default_factory=datetime.now)
     turns: List[Dict[str, Any]] = field(default_factory=list)
     metrics: List[TurnMetrics] = field(default_factory=list)
     user_id: str = "user"
@@ -49,10 +46,14 @@ class DialogueSession:
 class LLMInterface:
     """Abstract interface for LLM backends"""
 
-    def __init__(self, model_name: str = "gpt-3.5-turbo"):
+    def __init__(self, model_name: str = "gpt-3.5-turbo",sys_prompt:str = None): #type: ignore
         self.model_name = model_name
+        if sys_prompt is None:
+            self.system_prompt =  "You are a helpful assistant."
+        else:
+            self.system_prompt = sys_prompt
 
-    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int,float]:
         """Generate response from LLM
         Returns: (response_text, input_tokens, output_tokens)
         """
@@ -71,83 +72,84 @@ class LLMInterface:
             response = "I understand. How can I help you with your request?"
 
         output_tokens = len(response.split())
-        return response, input_tokens, output_tokens
+        return response, input_tokens, output_tokens, 0.0
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count for text"""
         # Rough estimation: 1 token ≈ 0.75 words
         return int(len(text.split()) * 1.33)
     
-class LLaMAInterface(LLMInterface):
-    """LLaMA interface using HuggingFace Transformers - DEFAULT INTERFACE"""
+# class LLaMAInterface(LLMInterface):
+#     """LLaMA interface using HuggingFace Transformers - DEFAULT INTERFACE"""
     
-    def __init__(self, model_name: str = "meta-llama/Llama-2-7b-chat-hf", device: str = "auto"):
-        super().__init__(model_name)
-        self.device = device
-        self.model = None
-        self.tokenizer = None
-        self._initialize_model()
+#     def __init__(self, model_name: str = "meta-llama/Llama-2-7b-chat-hf", device: str = "auto"):
+#         super().__init__(model_name)
+#         self.device = device
+#         self.model = None
+#         self.tokenizer = None
+#         self._initialize_model()
         
-    def _initialize_model(self):
-        """Initialize LLaMA model and tokenizer"""
-        try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
+#     def _initialize_model(self):
+#         """Initialize LLaMA model and tokenizer"""
+#         try:
+#             from transformers import AutoTokenizer, AutoModelForCausalLM
             
-            logger.info(f"Loading LLaMA model: {self.model_name}")
+#             logger.info(f"Loading LLaMA model: {self.model_name}")
             
-            # Determine device
-            if self.device == "auto":
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+#             # Determine device
+#             if self.device == "auto":
+#                 self.device = "cuda" if torch.cuda.is_available() else "cpu"
             
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name, trust_remote_code=True, padding_side="left"
-            )
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+#             # Load tokenizer
+#             self.tokenizer = AutoTokenizer.from_pretrained(
+#                 self.model_name, trust_remote_code=True, padding_side="left"
+#             )
+#             if self.tokenizer.pad_token is None:
+#                 self.tokenizer.pad_token = self.tokenizer.eos_token
             
-            # Load model
-            model_kwargs = {
-                "trust_remote_code": True,
-                "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32,
-                "low_cpu_mem_usage": True
-            }
-            if self.device == "cuda":
-                model_kwargs["device_map"] = "auto"
+#             # Load model
+#             model_kwargs = {
+#                 "trust_remote_code": True,
+#                 "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32,
+#                 "low_cpu_mem_usage": True
+#             }
+#             if self.device == "cuda":
+#                 model_kwargs["device_map"] = "auto"
             
-            self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
-            if self.device == "cpu":
-                self.model = self.model.to("cpu")
+#             self.model = AutoModelForCausalLM.from_pretrained(self.model_name, **model_kwargs)
+#             if self.device == "cpu":
+#                 self.model = self.model.to("cpu")
                 
-        except Exception as e:
-            logger.error(f"Failed to load LLaMA: {e}. Using fallback.")
-            self.model = None
+#         except Exception as e:
+#             logger.error(f"Failed to load LLaMA: {e}. Using fallback.")
+#             self.model = None
     
-    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
-        """Generate response using LLaMA"""
-        if not self.model:
-            return super().generate_response(prompt, max_tokens)
+#     def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+#         """Generate response using LLaMA"""
+#         if not self.model:
+#             return super().generate_response(prompt, max_tokens)
         
-        # Format for LLaMA chat
-        formatted_prompt = f"<s>[INST] {self._extract_user_input(prompt)} [/INST]"
+#         # Format for LLaMA chat
+#         formatted_prompt = f"<s>[INST] {self._extract_user_input(prompt)} [/INST]"
         
-        inputs = self.tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=2048)
-        if self.device == "cuda":
-            inputs = {k: v.to("cuda") for k, v in inputs.items()}
+#         inputs = self.tokenizer(formatted_prompt, return_tensors="pt", truncation=True, max_length=2048)
+#         if self.device == "cuda":
+#             inputs = {k: v.to("cuda") for k, v in inputs.items()}
         
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs, max_new_tokens=max_tokens, temperature=0.7, do_sample=True
-            )
+#         with torch.no_grad():
+#             outputs = self.model.generate(
+#                 **inputs, max_new_tokens=max_tokens, temperature=0.7, do_sample=True
+#             )
         
-        response = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-        return response.strip(), inputs["input_ids"].shape[1], len(outputs[0]) - inputs["input_ids"].shape[1]
+#         response = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+#         return response.strip(), inputs["input_ids"].shape[1], len(outputs[0]) - inputs["input_ids"].shape[1]
     
-    def _extract_user_input(self, prompt: str) -> str:
-        """Extract user input from prompt"""
-        if "User: " in prompt:
-            return prompt.split("User: ")[-1].replace("Assistant:", "").strip()
-        return prompt.strip()
+#     def _extract_user_input(self, prompt: str) -> str:
+#         """Extract user input from prompt"""
+#         if "User: " in prompt:
+#             return prompt.split("User: ")[-1].replace("Assistant:", "").strip()
+#         return prompt.strip()
+
 
 # class WorkingDialogueInterface(LLMInterface):
 #     """Improved dialogue interface with better prompt formatting"""
@@ -292,7 +294,6 @@ class LLaMAInterface(LLMInterface):
 #             response = "I understand. How can I help you with your request?"
         
 #         return response, len(prompt.split()), len(response.split())
-
 import requests
 import os
 
@@ -305,10 +306,10 @@ from typing import Tuple
 class GroqAPIInterface(LLMInterface):
     """Interface for Groq Language Model API"""
 
-    def __init__(self, api_key: str = None, model_name: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str = None, model_name: str = "llama-3.3-70b-versatile",sys_prompt:str = None): #type: ignore
         super().__init__(model_name)
         if api_key is None:
-            api_key = os.environ.get(GROQ_API_KEY)
+            api_key = "your_api_key"
 
         if not api_key:
             logger.warning("No GROQ_API_KEY found. Falling back to mock responses.")
@@ -320,37 +321,81 @@ class GroqAPIInterface(LLMInterface):
             except Exception as e:
                 logger.error(f"Failed to initialize Groq client: {e}")
                 self.client = None
+        if sys_prompt is None:
+            self.system_prompt =  "You are a helpful assistant."
+        else:
+            self.system_prompt = sys_prompt
 
-    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int]:
+    def generate_response(self, prompt: str, max_tokens: int = 150) -> Tuple[str, int, int,float]:
         """Generate response from Groq API
         Returns: (response_text, input_tokens, output_tokens)
         """
         if not self.client:
             logger.warning("Groq client not available, using fallback response.")
-            return super().generate_response(prompt, max_tokens)
+            # return super().generate_response(prompt, max_tokens)
+            msg, inp, outp, _ = super().generate_response(prompt, max_tokens)
+            return msg, inp, outp, 0.0
+        # --- Retry wrapper ---
+        for attempt in range(5):
+            try:
+                # Measure only the actual request time
+                start_time = time.perf_counter()
+                chat_completion = self.client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": prompt}
+                    ],
+                    model=self.model_name,
+                    max_tokens=max_tokens,
+                    temperature=0.7,
+                    top_p=0.9
+                )
+                llm_latency = time.perf_counter() - start_time
 
-        try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                model=self.model_name,
-                max_tokens=max_tokens,
-                temperature=0.7,
-                top_p=0.9
-            )
+                message = chat_completion.choices[0].message.content
+                input_tokens = chat_completion.usage.prompt_tokens       # type: ignore
+                output_tokens = chat_completion.usage.completion_tokens  # type: ignore
 
-            # Extract the assistant's message
-            message = chat_completion.choices[0].message.content
-            input_tokens = chat_completion.usage.prompt_tokens
-            output_tokens = chat_completion.usage.completion_tokens
+                return message.strip(), input_tokens, output_tokens, llm_latency # type: ignore
 
-            return message.strip(), input_tokens, output_tokens
+            except Exception as e:
+                err_str = str(e).lower()
+                if "rate limit" in err_str or "too many requests" in err_str or "429" in err_str:
+                    wait_time = 2
+                    logger.warning(f"Groq rate limit hit. Waiting {wait_time}s before retry {attempt+1}/5...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Groq API error: {e}")
+                msg, inp, outp, _ = super().generate_response(prompt, max_tokens)
+                return msg, inp, outp, 0.0
 
-        except Exception as e:
-            logger.error(f"Groq API error: {e}, using fallback response.")
-            return super().generate_response(prompt, max_tokens)
+        logger.error("Groq API failed after max retries.")
+        msg, inp, outp, _ = super().generate_response(prompt, max_tokens)
+        return msg, inp, outp, 0.0
+
+        # try:
+        #     chat_completion = self.client.chat.completions.create(
+        #         messages=[
+        #             {"role": "system", "content": "You are a helpful assistant."},
+        #             {"role": "user", "content": prompt}
+        #         ],
+        #         model=self.model_name,
+        #         max_tokens=max_tokens,
+        #         temperature=0.7,
+        #         top_p=0.9
+        #     )
+
+        #     # Extract the assistant's message
+        #     message = chat_completion.choices[0].message.content
+        #     input_tokens = chat_completion.usage.prompt_tokens       #type: ignore
+        #     output_tokens = chat_completion.usage.completion_tokens  #type: ignore
+
+        #     return message.strip(), input_tokens, output_tokens #type: ignore
+
+        # except Exception as e:
+        #     logger.error(f"Groq API error: {e}, using fallback response.")
+        #     return super().generate_response(prompt, max_tokens)
+
 
 # class GeminiAPIInterface(LLMInterface):
 #     """Interface for Gemini Language Model API"""
@@ -391,18 +436,17 @@ class GroqAPIInterface(LLMInterface):
 #             return super().generate_response(prompt, max_tokens)
 
 
-
 class SSMGDialogueAgent:
     """Main SSMG dialogue agent that orchestrates all components"""
 
     def __init__(self, 
-                 llm_interface: LLMInterface = None,
-                 graph_config: Dict[str, Any] = None,
-                 summary_config: SummaryConfig = None,
-                 spacy_model: str = "en_core_web_sm"):
+                 llm_interface: LLMInterface = None,    #type: ignore
+                 graph_config: Dict[str, Any] = None,   #type: ignore
+                 summary_config: SummaryConfig = None,   #type: ignore
+                 spacy_model: str = "en_core_web_sm"): 
 
         # Initialize components
-        self.llm = llm_interface or GeminiAPIInterface()
+        self.llm = llm_interface or GroqAPIInterface()
         self.graph = SSMGGraph(**(graph_config or {}))
         self.extractor = SSMGExtractor(spacy_model)
         self.summarizer = SSMGSummarizer(summary_config or SummaryConfig())
@@ -410,10 +454,11 @@ class SSMGDialogueAgent:
         # Session management
         self.current_session: Optional[DialogueSession] = None
         self.system_prompt = self._build_system_prompt()
+        self.llm.system_prompt = self.system_prompt
 
         logger.info(f"Initialized SSMG agent with {self.llm.model_name}")
 
-    def start_session(self, session_id: str = None, user_id: str = "user") -> str:
+    def start_session(self, session_id: str = None, user_id: str = "user") -> str: #type: ignore
         """Start a new dialogue session"""
         if session_id is None:
             session_id = f"session_{int(time.time())}"
@@ -430,15 +475,16 @@ class SSMGDialogueAgent:
             decay_rate=self.graph.decay_rate
         )
 
-        user_node = Node(
-            id='user_session',  # Fixed ID, not dependent on turn
+        new_user_node = Node(
+            id='user',  # Fixed ID, not dependent on turn
             type=NodeType.ENTITY,
             content='user',
             confidence=1.0,
             turn_id=0,  # Turn 0 indicates session-level node
             metadata={'is_user': True, 'persistent': True}
         )
-        self.graph.add_node(user_node)
+        self.graph.add_node(new_user_node)
+        self.graph.user_node = new_user_node #type: ignore
 
         logger.info(f"Started session: {session_id}")
         return session_id
@@ -447,7 +493,7 @@ class SSMGDialogueAgent:
         """End current session and return session data"""
         if self.current_session:
             session = self.current_session
-            session.end_time = datetime.now()
+            session.end_time = datetime.now() 
 
             # Clear ephemeral data
             self.graph = SSMGGraph()
@@ -457,18 +503,20 @@ class SSMGDialogueAgent:
             return session
         return None
 
-    def process_turn(self, user_input: str) -> Tuple[str, TurnMetrics]:
+    def process_turn(self, user_input: str) -> Tuple[str, TurnMetrics, str]:
         """Process a single dialogue turn"""
         if not self.current_session:
             raise ValueError("No active session. Call start_session() first.")
 
-        turn_start = time.time()
+        turn_start = time.perf_counter()
         turn_id = len(self.current_session.turns)
 
         # Step 1: Extract information from user input
         extract_start = time.time()
-        extraction_result = self.extractor.extract(user_input, turn_id, self.current_session.user_id)
-        extraction_time = time.time() - extract_start
+        extraction_result = self.extractor.extract_and_infer(user_input, turn_id, self.graph.user_node) #type: ignore
+        # extraction_result = self.extractor.extract(user_input, turn_id, self.current_session.user_id)
+
+        extraction_time = time.perf_counter() - extract_start
 
         # Step 2: Update graph
         nodes_before = len(self.graph.nodes)
@@ -489,25 +537,38 @@ class SSMGDialogueAgent:
         self.graph.advance_turn()
 
         # Step 3: Generate summary
-        summary_start = time.time()
-        current_entities = {node.content for node in extraction_result.nodes 
-                          if node.type == NodeType.ENTITY}
-        current_intent = None
+        summary_start = time.perf_counter()
+        # current_entities = {node.content for node in extraction_result.nodes 
+        #                   if node.type == NodeType.ENTITY}
+        # current_entities = {node.content for node in extraction_result.nodes 
+        #                   if node.type.value == 'entity'}
+        current_entities = set()
         for node in extraction_result.nodes:
-            if node.type == NodeType.INTENT:
+            # print(id,":",node.type)
+            if node.type.value == 'entity':
+                current_entities.add(node.content)
+        if current_entities == set():
+            logger.warning(f"[Turn ID: {turn_id}] No ENTITY Nodes found in the text: {user_input}")
+        # print(id,":",node.type)
+        current_intent = "unknown"
+        for node in extraction_result.nodes:
+            # if node.type == NodeType.INTENT:
+            if node.type.value == 'intent':
                 current_intent = node.content
                 break
+        if current_intent == "unknown":
+            logger.debug(f"[Turn ID: {turn_id}] No INTENT Nodes found in the text: {user_input}")
 
-        summary = self.summarizer.summarize(self.graph, current_entities, current_intent)
-        summarization_time = time.time() - summary_start
+        summary = self.summarizer.summarize(self.graph, current_entities, current_intent)  #type: ignore
+        summarization_time = time.perf_counter() - summary_start
 
         # Step 4: Generate LLM response
-        llm_start = time.time()
+        # llm_start = time.time()
         full_prompt = self._build_prompt(summary, user_input)
-        response, input_tokens, output_tokens = self.llm.generate_response(full_prompt)
-        llm_time = time.time() - llm_start
+        response, input_tokens, output_tokens, llm_time  = self.llm.generate_response(full_prompt)
+        # llm_time = time.time() - llm_start
 
-        total_time = time.time() - turn_start
+        total_time = time.perf_counter() - turn_start
 
         # Step 5: Record turn data
         turn_data = {
@@ -547,14 +608,15 @@ class SSMGDialogueAgent:
 
         self.current_session.metrics.append(metrics)
 
-        logger.info(f"Turn {turn_id}: {total_time:.3f}s total, {len(summary)} char summary")
-        return response, metrics
+        logger.info(f"Turn {turn_id}: {total_time:.3f}s total, {len(summary)} char summary, Total Nodes: {len(self.graph.nodes)}, Total Edges: {len(self.graph.edges)}")
+
+        return response, metrics, current_intent
 
     def _build_system_prompt(self) -> str:
         """Build the system prompt for the LLM"""
         return """You are a helpful assistant with access to conversation context and user preferences. 
-Use the provided context to maintain consistency and remember user constraints across the conversation.
-Be concise but helpful, and always respect user preferences and constraints mentioned in the context."""
+                Use the provided context to maintain consistency and remember user constraints across the conversation.
+                Be concise but helpful, and always respect user preferences and constraints mentioned in the context."""
 
     def _build_prompt(self, summary: str, user_input: str) -> str:
         """Build the full prompt for LLM including context summary"""
