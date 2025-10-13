@@ -23,7 +23,7 @@ class FullHistoryBaseline:
         self.history = []
 
     def process_turn(self, user_input: str) -> BaselineResult:
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Add user input to history
         self.history.append(f"User: {user_input}")
@@ -32,13 +32,15 @@ class FullHistoryBaseline:
         full_context = "\n".join(self.history)
         prompt = f"{full_context}\nAssistant:"
 
+        before_llm = time.perf_counter() - start_time
         # Generate response
-        response, input_tokens, _ = self.llm.generate_response(prompt)
+        response, input_tokens, _ , latency_llm = self.llm.generate_response(prompt)
 
+        after_llm = time.perf_counter()
         # Add assistant response to history
         self.history.append(f"Assistant: {response}")
-
-        latency = time.time() - start_time
+        after_llm_time = time.perf_counter() - after_llm
+        latency = before_llm + latency_llm + after_llm_time
 
         return BaselineResult(
             response=response,
@@ -59,7 +61,7 @@ class SlidingWindowBaseline:
         self.history = deque(maxlen=window_size * 2)  # *2 for user+assistant pairs
 
     def process_turn(self, user_input: str) -> BaselineResult:
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Add user input to sliding window
         self.history.append(f"User: {user_input}")
@@ -68,13 +70,15 @@ class SlidingWindowBaseline:
         context = "\n".join(self.history)
         prompt = f"{context}\nAssistant:"
 
+        before_llm = time.perf_counter() - start_time
         # Generate response
-        response, input_tokens, _ = self.llm.generate_response(prompt)
+        response, input_tokens, _ , latency_llm = self.llm.generate_response(prompt)
 
+        after_llm = time.perf_counter()
         # Add assistant response to sliding window
         self.history.append(f"Assistant: {response}")
-
-        latency = time.time() - start_time
+        after_llm_time = time.perf_counter() - after_llm
+        latency = before_llm + latency_llm + after_llm_time
 
         return BaselineResult(
             response=response,
@@ -95,7 +99,7 @@ class RAGBaseline:
         self.turn_store = []  # Store of previous turns
 
     def process_turn(self, user_input: str) -> BaselineResult:
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         # Simple retrieval based on keyword overlap
         relevant_turns = self._retrieve_relevant_turns(user_input)
@@ -107,14 +111,18 @@ class RAGBaseline:
         else:
             prompt = f"User: {user_input}\nAssistant:"
 
+        before_llm = time.perf_counter() - start_time
         # Generate response
-        response, input_tokens, _ = self.llm.generate_response(prompt)
+        response, input_tokens, _ , latency_llm = self.llm.generate_response(prompt)
 
+        after_llm = time.perf_counter()
         # Store current turn
         turn_text = f"User: {user_input}\nAssistant: {response}"
         self.turn_store.append(turn_text)
 
-        latency = time.time() - start_time
+        # latency = time.time() - start_time
+        after_llm_time = time.perf_counter() - after_llm
+        latency = before_llm + latency_llm + after_llm_time
 
         return BaselineResult(
             response=response,
