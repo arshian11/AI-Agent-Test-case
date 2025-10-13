@@ -10,12 +10,12 @@ import time
 from datetime import datetime
 import hashlib
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='dialogue_agent.log',  # <-- logs go here
-    filemode='w'  # 'w' to overwrite each run, 'a' to append
-)
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(levelname)s - %(message)s',
+#     filename='dialogue_agent.log',  # <-- logs go here
+#     filemode='w'  # 'w' to overwrite each run, 'a' to append
+# )
 logger = logging.getLogger(__name__)
 
 def setup_logging(level: str = "INFO", log_file: str = None):
